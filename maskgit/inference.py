@@ -31,16 +31,16 @@ from maskgit.configs import maskgit_class_cond_config
 from maskgit.libml import parallel_decode
 from maskgit.utils import restore_from_path
 
-#TODO: this can be usedforediting aswell; justneedto pass in a different start_iter
+#TODO: this can be used for editing as well; just need to pass in a different start_iter
 #TODO: perhaps move rng out of  this class?
 class ImageNet_class_conditional_generator():
     def checkpoint_canonical_path(maskgit_or_tokenizer, image_size):
         return f"./checkpoints/{maskgit_or_tokenizer}_imagenet{image_size}_checkpoint"
 
-    def __init__(self, image_size=256):
+    def __init__(self, image_size=256, batch_size=8):
         maskgit_cf = maskgit_class_cond_config.get_config()
         maskgit_cf.image_size = int(image_size)
-        maskgit_cf.eval_batch_size = 8
+        maskgit_cf.eval_batch_size = batch_size
 
         # Define tokenizer
         self.tokenizer_model = vqgan_tokenizer.VQVAE(config=maskgit_cf, dtype=jnp.float32, train=False)
@@ -73,9 +73,9 @@ class ImageNet_class_conditional_generator():
 
     def generate_samples(self, input_tokens, rng, start_iter=0, num_iterations=16):
       def tokens_to_logits(seq):
-        logits = self.transformer_model.apply(self.transformer_variables, seq, deterministic=True)
+        logits, attention_outputs = self.transformer_model.apply(self.transformer_variables, seq, deterministic=True)
         logits = logits[..., :self.maskgit_cf.vqvae.codebook_size]
-        return logits
+        return logits, attention_outputs
 
       output_tokens = parallel_decode.decode(
             input_tokens,
@@ -86,7 +86,7 @@ class ImageNet_class_conditional_generator():
             mask_token_id=self.maskgit_cf.transformer.mask_token_id,
             start_iter=start_iter,
             )
-    
+
       output_tokens = jnp.reshape(output_tokens[:, -1, 1:], [-1, self.transformer_latent_size, self.transformer_latent_size])
       gen_images = self.tokenizer_model.apply(
           self.tokenizer_variables,
