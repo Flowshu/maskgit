@@ -56,7 +56,7 @@ class Attention(nn.Module):
   def __call__(self, layer_input: jnp.ndarray, input_mask: jnp.ndarray,
                deterministic: bool) -> jnp.ndarray:
     attention_mask = nn.make_attention_mask(input_mask, input_mask)
-    attention_output = nn.attention.SelfAttention(
+    self_attention = nn.attention.SelfAttention(
         num_heads=self.num_attention_heads,
         qkv_features=self.hidden_size,
         dropout_rate=self.attention_probs_dropout_prob,
@@ -64,7 +64,8 @@ class Attention(nn.Module):
         kernel_init=self.initializer_fn,
         bias_init=jax.nn.initializers.zeros,
         name='self_attention',
-    )(layer_input, attention_mask)
+    )
+    attention_output, attention_weights = self_attention(layer_input, attention_mask)
 
     attention_output = nn.Dropout(rate=self.hidden_dropout_prob)(
         attention_output, deterministic=deterministic)
@@ -72,7 +73,7 @@ class Attention(nn.Module):
         epsilon=LAYERNORM_EPSILON, name='attention_output_ln')(
             attention_output + layer_input)
 
-    return attention_output
+    return attention_output, attention_weights
 
 
 class Mlp(nn.Module):
@@ -118,7 +119,7 @@ class TransformerLayer(nn.Module):
   @nn.compact
   def __call__(self, layer_input: jnp.ndarray, input_mask: jnp.ndarray,
                deterministic: bool) -> jnp.ndarray:
-    attention_output = Attention(
+    attention_output, attention_weights = Attention(
         hidden_size=self.hidden_size,
         hidden_dropout_prob=self.hidden_dropout_prob,
         num_attention_heads=self.num_attention_heads,
@@ -135,7 +136,7 @@ class TransformerLayer(nn.Module):
         initializer_fn=self.initializer_fn)(
             attention_output=attention_output, deterministic=deterministic)
 
-    return layer_output
+    return layer_output, attention_weights
 
 
 class Embed(nn.Module):
@@ -260,8 +261,9 @@ class Transformer(nn.Module):
             input_ids=input_ids, deterministic=deterministic)
 
     layer_input = input_embeddings
+    attention_weights_per_layer = []
     for _ in range(self.num_hidden_layers):
-      layer_output = TransformerLayer(
+      layer_output, attention_weights = TransformerLayer(
           intermediate_size=self.intermediate_size,
           hidden_size=self.hidden_size,
           hidden_dropout_prob=self.hidden_dropout_prob,
@@ -272,6 +274,7 @@ class Transformer(nn.Module):
               input_mask=jnp.ones_like(input_ids, dtype=jnp.int32),
               deterministic=deterministic)
       layer_input = layer_output
+      attention_weights_per_layer.append(attention_weights)
 
     word_embedding_matrix = self.variables['params']['Embed_0'][
         'word_embeddings']['embedding']
@@ -280,5 +283,4 @@ class Transformer(nn.Module):
         initializer_fn=truncated_normal(self.initializer_range))(
             last_layer=layer_output, embeddings=word_embedding_matrix)
 
-    return logits
-
+    return logits, (layer_output, attention_weights_per_layer)
